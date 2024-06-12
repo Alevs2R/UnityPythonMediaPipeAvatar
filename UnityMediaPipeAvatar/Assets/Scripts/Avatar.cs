@@ -1,6 +1,8 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using System;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 public class Avatar : MonoBehaviour
 {
@@ -143,6 +145,12 @@ public class Avatar : MonoBehaviour
 
     private void Update()
     {
+
+        Stopwatch stopwatch = new Stopwatch();
+
+        // Start measuring time
+        stopwatch.Start();
+
         // Adjust the vertical position of the avatar to keep it approximately grounded.
         if(parentCalibrationData.Count > 0)
         {
@@ -161,6 +169,8 @@ public class Avatar : MonoBehaviour
             transform.position = Vector3.Lerp(transform.position,initialPosition+ Vector3.up * displacement + Vector3.up * footGroundOffset,
                 Time.deltaTime*5f);
         }
+
+        // Debug.Log(System.DateTime.Now.ToString("HH:mm:ss.fff") + "Update avatar");
 
         // Compute the new rotations for each limbs of the avatar using the calibration datas we created before.
         foreach(var i in parentCalibrationData)
@@ -197,6 +207,19 @@ public class Avatar : MonoBehaviour
             targetRot= deltaRotTracked * initialRotation;
             transform.rotation = Quaternion.Lerp(transform.rotation, targetRot, Time.deltaTime * speed);
 
+        }
+
+
+        // Stop measuring time
+        stopwatch.Stop();
+
+        // Calculate the elapsed time in microseconds
+        long elapsedTicks = stopwatch.ElapsedTicks;
+        double microseconds = (double)elapsedTicks / Stopwatch.Frequency * 1_000_000;
+
+        if (microseconds > 10000) {
+            // Display the elapsed time
+            UnityEngine.Debug.Log($"Execution Time: {microseconds} µs");
         }
 
     }

@@ -31,40 +31,6 @@ def draw_landmarks_on_image(rgb_image, detection_result):
       solutions.drawing_styles.get_default_pose_landmarks_style())
   return annotated_image
 
-# the capture thread captures images from the WebCam on a separate thread (for performance)
-class CaptureThread(threading.Thread):
-    cap = None
-    ret = None
-    frame = None
-    isRunning = False
-    counter = 0
-    timer = 0.0
-    frame_timestamp_ms = 0.0
-
-    def run(self):
-        self.cap = cv2.VideoCapture(global_vars.CAM_INDEX) # sometimes it can take a while for certain video captures
-        if global_vars.USE_CUSTOM_CAM_SETTINGS:
-            self.cap.set(cv2.CAP_PROP_FPS, global_vars.FPS)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,global_vars.WIDTH)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT,global_vars.HEIGHT)
-
-        time.sleep(1)
-        
-        print("Opened Capture @ %s fps"%str(self.cap.get(cv2.CAP_PROP_FPS)))
-        while not global_vars.KILL_THREADS:
-            print("CAPTURE NEW")
-            self.ret, self.frame = self.cap.read()
-            self.isRunning = True
-            self.frame_timestamp_ms += 1000 / global_vars.FPS
-            if global_vars.DEBUG:
-                self.counter = self.counter+1
-                if time.time()-self.timer>=3:
-                    print("Capture FPS: ",self.counter/(time.time()-self.timer))
-                    self.counter = 0
-                    self.timer = time.time()
-
-            if global_vars.PLAY_FROM_FILE:
-                time.sleep(1.0/global_vars.FPS)
 
 # the body thread actually does the 
 # processing of the captured images, and communication with unity
@@ -75,12 +41,19 @@ class BodyThread(threading.Thread):
     timeSinceCheckedConnection = 0
     timeSincePostStatistics = 0
     frame_timestamp_ms_old = -1
+    frame_timestamp_ms = 0
 
     def run(self):
         self.setup_comms()
         
-        capture = CaptureThread()
-        capture.start()
+        self.cap = cv2.VideoCapture(global_vars.CAM_INDEX) # sometimes it can take a while for certain video captures
+        
+        if global_vars.USE_CUSTOM_CAM_SETTINGS:
+            self.cap.set(cv2.CAP_PROP_FPS, global_vars.FPS)
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,global_vars.WIDTH)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT,global_vars.HEIGHT)
+
+        time.sleep(1)
 
         BaseOptions = mp.tasks.BaseOptions
         PoseLandmarker = mp.tasks.vision.PoseLandmarker
@@ -92,50 +65,43 @@ class BodyThread(threading.Thread):
         running_mode=VisionRunningMode.VIDEO)   
 
         with PoseLandmarker.create_from_options(options) as landmarker:
-            
-            while not global_vars.KILL_THREADS and capture.isRunning==False:
-                print("Waiting for camera and capture thread.")
-                time.sleep(0.5)
-            print("Beginning capture")
                 
-            while not global_vars.KILL_THREADS and capture.cap.isOpened():
+            while not global_vars.KILL_THREADS and self.cap.isOpened():
                 ti = time.time()
 
-                # Fetch stuff from the capture thread
-                ret = capture.ret
-                image = capture.frame
-                                
+                ret, image = self.cap.read()
+                self.frame_timestamp_ms += 1000.0 / global_vars.FPS
+
                 if image is None:
                     continue
 
+
                 # Image transformations and stuff
-                # image = cv2.flip(image, 1)
+                image = cv2.flip(image, 1)
                 image.flags.writeable = global_vars.DEBUG
 
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image)
                 
                 # Detections
-                if self.frame_timestamp_ms_old == capture.frame_timestamp_ms:
-                    print("skip")
+                if self.frame_timestamp_ms_old == self.frame_timestamp_ms:
                     continue
-
-                print("capture time ", capture.frame_timestamp_ms)
-                results = landmarker.detect_for_video(mp_image, int(capture.frame_timestamp_ms))
-                self.frame_timestamp_ms_old = capture.frame_timestamp_ms
+                self.frame_timestamp_ms_old = self.frame_timestamp_ms
+                        
+                results = landmarker.detect_for_video(mp_image, int(self.frame_timestamp_ms))
 
                 tf = time.time()
                 
                 # Rendering results
                 if global_vars.DEBUG:
-                    if time.time()-self.timeSincePostStatistics>=1:
-                        print("Detection fps: %f"%(1/(tf-ti)))
-                        self.timeSincePostStatistics = time.time()
+                    # if time.time()-self.timeSincePostStatistics>=1:
+                    print("Detection fps: %f"%(1/(tf-ti)))
+                    self.timeSincePostStatistics = time.time()
                         
                     annotated_image = draw_landmarks_on_image(image, results)
 
-                    cv2.imshow('Body Tracking', annotated_image)
+                    cv2.imshow('Body Tracking', cv2.flip(annotated_image,1))
                     cv2.waitKey(1)
-    
+
                 # Set up data for relay
                 landmark_pack = lambda i,landmark: "{}|{}|{}|{}".format(i,landmark.x,landmark.y,landmark.z)
                 self.data = ''
@@ -144,10 +110,10 @@ class BodyThread(threading.Thread):
                     packed_landmarks = [landmark_pack(i,l) for i,l in enumerate(results.pose_world_landmarks[0])]
                     self.data = '\n'.join(packed_landmarks)
 
-                # self.send_data(self.data)
+                self.send_data(self.data)
                     
         self.pipe.close()
-        capture.cap.release()
+        self.cap.release()
         cv2.destroyAllWindows()
         pass
 
@@ -183,3 +149,6 @@ class BodyThread(threading.Thread):
                     self.pipe= None
         pass
                         
+
+thread = BodyThread()
+thread.start()
